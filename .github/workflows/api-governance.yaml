@@ -23,12 +23,9 @@ on:
         description: 'Modelo de Copilot a utilizar'
         type: string
         default: 'gpt-4o'
-    secrets:
-      github_token:
-        description: >
-          GITHUB_TOKEN del repositorio que llama. Necesario para comentar
-          en el PR y autenticar el Copilot CLI.
-        required: true
+    # No se declaran secrets explícitos: el caller usa `secrets: inherit`,
+    # lo que pasa GITHUB_TOKEN automáticamente y evita la colisión con el
+    # nombre reservado `github_token` que GitHub no permite en workflow_call.
 
 permissions:
   contents: read
@@ -63,7 +60,7 @@ jobs:
       - name: Autenticar Copilot CLI
         run: echo "$GH_TOKEN" | copilot auth login --with-token
         env:
-          GH_TOKEN: ${{ secrets.github_token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Detectar contratos OpenAPI modificados
         id: detect
@@ -105,7 +102,7 @@ jobs:
       - name: "Ejecutar skill via Copilot CLI y publicar hallazgos"
         if: steps.detect.outputs.count != '0'
         env:
-          GITHUB_TOKEN: ${{ secrets.github_token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_BRANCH: ${{ steps.detect.outputs.base }}
           CONTRACTS: ${{ steps.detect.outputs.contracts }}

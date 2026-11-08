@@ -63,32 +63,69 @@ jobs:
         id: detect
         run: |
           BASE="${{ github.event.pull_request.base.ref }}"
+          echo "Base branch : $BASE"
+          echo "HEAD commit : $(git rev-parse --short HEAD)"
 
-          # Expandir patrones separados por coma en args para git diff
-          PATTERNS="${{ inputs.contracts_path }}"
-          GIT_PATTERNS=""
-          IFS=',' read -ra PARTS <<< "$PATTERNS"
-          for p in "${PARTS[@]}"; do
-            GIT_PATTERNS="$GIT_PATTERNS -- ${p// /}"
-          done
+          # Garantizar que la rama base esté disponible como origin/<base>
+          git fetch origin "$BASE" --depth=1 2>/dev/null \
+            || git fetch origin --depth=1 2>/dev/null || true
+          echo "origin/$BASE → $(git rev-parse --short origin/$BASE 2>/dev/null || echo 'no encontrado')"
 
+          # Listar todos los archivos añadidos/modificados/renombrados en el PR
+          # (sin filtro de path en git diff para evitar el bug de múltiples --)
           CHANGED=$(git diff --name-only --diff-filter=AMR \
-            origin/${BASE}...HEAD \
-            $GIT_PATTERNS \
+            "origin/${BASE}...HEAD" \
             | grep -v '^\.github/' || true)
 
+          echo "--- Archivos modificados en el PR ---"
+          echo "${CHANGED:-  (ninguno)}"
+          echo "-------------------------------------"
+
+          # Filtrar por prefijo de los patrones de inputs.contracts_path
+          # y verificar que el archivo tenga contenido OpenAPI
+          PATTERNS="${{ inputs.contracts_path }}"
           OAS_FILES=""
+
           while IFS= read -r f; do
-            if [ -f "$f" ] && grep -qiE '^openapi:' "$f" 2>/dev/null; then
+            [ -z "$f" ] && continue
+
+            # Verificar que el archivo existe localmente
+            if [ ! -f "$f" ]; then
+              echo "  [skip] no existe en disco: $f"
+              continue
+            fi
+
+            # Verificar que algún patrón coincide (usando prefijo pre-glob)
+            MATCH=false
+            IFS=',' read -ra PARTS <<< "$PATTERNS"
+            for p in "${PARTS[@]}"; do
+              p="${p// /}"                  # quitar espacios
+              prefix="${p%%\**}"            # extraer prefijo antes del primer *
+              if [[ "$f" == "$prefix"* ]]; then
+                MATCH=true; break
+              fi
+            done
+
+            if ! $MATCH; then
+              echo "  [skip] fuera de patterns: $f"
+              continue
+            fi
+
+            # Verificar que es un contrato OpenAPI (YAML: 'openapi:' / JSON: '"openapi":')
+            if grep -qiE '^\s*(openapi\s*:|"openapi"\s*:)' "$f" 2>/dev/null; then
+              echo "  [ok]   contrato OpenAPI: $f"
               OAS_FILES="${OAS_FILES}${f}\n"
+            else
+              echo "  [skip] no es OpenAPI: $f"
             fi
           done <<< "$CHANGED"
+
+          COUNT=$(printf "%b" "$OAS_FILES" | grep -c '.' || true)
+          echo "Contratos OpenAPI detectados: $COUNT"
 
           echo "contracts<<EOF" >> $GITHUB_OUTPUT
           printf "%b" "$OAS_FILES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-
-          COUNT=$(printf "%b" "$OAS_FILES" | grep -c '.' || true)
           echo "count=$COUNT" >> $GITHUB_OUTPUT
           echo "base=$BASE" >> $GITHUB_OUTPUT
 

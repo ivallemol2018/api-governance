@@ -56,11 +56,8 @@ jobs:
 
       - name: Instalar Copilot CLI
         run: npm install -g @github/copilot
-
-      - name: Autenticar Copilot CLI
-        run: echo "$GH_TOKEN" | copilot auth login --with-token
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # @github/copilot lee GITHUB_TOKEN del entorno directamente.
+        # No tiene subcomando auth login — la autenticación es implícita.
 
       - name: Detectar contratos OpenAPI modificados
         id: detect
@@ -95,11 +92,11 @@ jobs:
           echo "count=$COUNT" >> $GITHUB_OUTPUT
           echo "base=$BASE" >> $GITHUB_OUTPUT
 
-      # El CLI de Copilot ejecuta el SKILL.md completo (pasos 1-4):
-      # extraer_contexto.py + lectura de contexto + verificaciones + tabla
-      # El script Python solo orquesta y publica el resultado en el PR.
-      # No se hace ninguna llamada HTTP a la Copilot Chat API.
-      - name: "Ejecutar skill via Copilot CLI y publicar hallazgos"
+      # run_review.py:
+      #   Fase 1: corre extraer_contexto.py (reglas calculadas + preguntas verificación)
+      #   Fase 2: pasa contexto.md como prompt a `copilot -p "..."` (modo no-interactivo)
+      #   Fase 3: publica tabla de hallazgos en el PR
+      - name: "Análisis híbrido y publicar hallazgos"
         if: steps.detect.outputs.count != '0'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

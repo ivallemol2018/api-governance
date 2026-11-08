@@ -1,6 +1,6 @@
 """
 Orquestador de revisión de contratos OpenAPI para GitHub Actions.
-Invoca el skill via `copilot run` (CLI de @github/copilot).
+Orquesta las dos fases del motor híbrido usando `copilot -p` (CLI de @github/copilot).
 Sin llamadas HTTP a la Copilot Chat API — el CLI gestiona todo.
 Solo stdlib Python.
 """
@@ -20,39 +20,68 @@ MARKER      = "<!-- api-governance-review -->"
 
 # ── Ejecución del skill via Copilot CLI ───────────────────────────────────────
 
-def ejecutar_skill(contrato: str, rama_base: str, codigos: str) -> tuple[str, bool]:
+# ── Fase 1: generación de contexto (script Python) ───────────────────────────
+
+def generar_contexto(contrato: str, rama_base: str, codigos: str) -> tuple[str, bool]:
     """
-    Invoca el SKILL.md completo a través del CLI de @github/copilot.
-
-    El CLI ejecuta internamente los pasos 1-4 definidos en SKILL.md:
-      · Paso 1: corre extraer_contexto.py (reglas calculadas + preguntas verificación)
-      · Paso 2: lee contexto.md generado
-      · Paso 3: responde SÍ/NO a las verificaciones [G1],[P1],[E1]…
-      · Paso 4: produce la tabla final de hallazgos en stdout
-
-    No se hace ninguna llamada HTTP a api.githubcopilot.com desde este script.
-
-    Devuelve (hallazgos_markdown | mensaje_error, ok).
+    Fase 1 del motor híbrido: corre extraer_contexto.py.
+    Resuelve reglas calculadas (R-GENM02, R-DATM01, R-DATM04) y genera
+    las preguntas de verificación [G1],[P1],[E1]… para Copilot.
+    Devuelve (ruta_contexto.md | mensaje_error, ok).
     """
-    # Argumento del skill según SKILL.md:
-    # "[ruta del contrato] [--rama RAMA] [--codigos CODIGOS]"
-    skill_arg = f'"{contrato}" "--rama" "origin/{rama_base}"'
+    script = str(_SKILL_BASE / ".github/skills/revisar-contratos-api/scripts/extraer_contexto.py")
+    output_path = f".api-review/{Path(contrato).stem}/contexto.md"
+    cmd = [sys.executable, script, contrato,
+           "--rama", f"origin/{rama_base}",
+           "--salida", output_path]
     if codigos:
-        skill_arg += f' "--codigos" "{codigos}"'
+        cmd += ["--codigos", codigos]
 
-    result = subprocess.run(
-        ["copilot", "run", str(SKILL_MD), skill_arg],
-        capture_output=True,
-        text=True,
-        env={**os.environ},
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    salida = result.stdout.strip()
+    if result.returncode != 0 or salida.startswith("Error:"):
+        return salida or result.stderr.strip(), False
+    return output_path, True
+
+
+# ── Fase 2: análisis semántico (copilot -p) ───────────────────────────────────
+
+def revisar_con_copilot_cli(contexto_path: str) -> str:
+    """
+    Fase 2 del motor híbrido: pasa el contexto al CLI de @github/copilot
+    usando el flag -p (modo no-interactivo).
+
+    El CLI lee GITHUB_TOKEN del entorno — sin auth login, sin Chat API.
+    Sintaxis: copilot -p "prompt"  (o --prompt)
+
+    El prompt incluye las instrucciones del SKILL.md (pasos 2-4) y el
+    contexto.md generado en la Fase 1.
+    """
+    skill   = SKILL_MD.read_text(encoding="utf-8")
+    contexto = Path(contexto_path).read_text(encoding="utf-8")
+
+    # Incluimos solo los pasos 2-4 del SKILL.md (el paso 1 ya fue ejecutado)
+    prompt = (
+        f"Sigue los pasos 2, 3 y 4 de estas instrucciones:\n\n"
+        f"{skill}\n\n"
+        f"El contexto del contrato ya fue generado (paso 1 completado):\n\n"
+        f"{contexto}"
     )
 
-    salida = result.stdout.strip()
+    result = subprocess.run(
+        ["copilot", "-p", prompt],          # -p = --prompt, modo no-interactivo
+        capture_output=True,
+        text=True,
+        env={**os.environ},                 # GITHUB_TOKEN ya está en el entorno
+    )
 
-    if result.returncode != 0 or salida.startswith("NO_EVALUABLE"):
-        return salida or result.stderr.strip(), False
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Error en Copilot CLI: {result.stderr.strip()}\n"
+            "Verifica que GITHUB_TOKEN esté disponible y tenga licencia Copilot."
+        )
 
-    return salida, True
+    return result.stdout.strip()
 
 
 # ── Comentario en PR ──────────────────────────────────────────────────────────
@@ -104,28 +133,29 @@ def main() -> None:
     model_info  = os.environ.get("COPILOT_MODEL", "default")
 
     reglas_info = f"reglas: {codigos}" if codigos else "todas las reglas activas"
-    print(f"Skill: {SKILL_MD} | Modelo: {model_info} | Contratos: {len(contracts)} | {reglas_info}")
-    print("El CLI de Copilot ejecuta el skill completo (pasos 1-4). Sin llamadas a Chat API.")
+    print(f"Contratos: {len(contracts)} | {reglas_info}")
+    print("Fase 1: extraer_contexto.py | Fase 2: copilot -p | Sin Chat API.")
 
     resultados = []
 
     for contrato in contracts:
         print(f"  → {contrato}")
 
-        # El CLI ejecuta internamente extraer_contexto.py + análisis híbrido
-        hallazgos, ok = ejecutar_skill(contrato, base_branch, codigos)
-
+        # Fase 1: script resuelve reglas calculadas y genera preguntas de verificación
+        contexto_path, ok = generar_contexto(contrato, base_branch, codigos)
         if not ok:
             resultados.append(
-                f"### `{contrato}`\n\n> **NO_EVALUABLE:** {hallazgos}\n"
+                f"### `{contrato}`\n\n> **NO_EVALUABLE:** {contexto_path}\n"
             )
             continue
 
+        # Fase 2: Copilot CLI (-p) responde verificaciones y combina tabla final
+        hallazgos = revisar_con_copilot_cli(contexto_path)
         resultados.append(f"### `{contrato}`\n\n{hallazgos}\n")
 
     cuerpo = (
-        f"## Revisión de Contratos API\n\n"
-        f"> Modelo: `{MODEL}` (GitHub Copilot CLI)\n\n"
+        "## Revisión de Contratos API\n\n"
+        "> GitHub Copilot CLI (`copilot -p`)\n\n"
         + "\n---\n".join(resultados)
         + "\n\n---\n*Generado por api-governance-ai-skills*"
     )

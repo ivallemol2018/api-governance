@@ -1,0 +1,120 @@
+name: API Governance Review (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      contracts_path:
+        description: >
+          Patron glob de contratos OpenAPI a revisar, relativo a la raíz
+          del repo. Acepta múltiples patrones separados por coma.
+          Ejemplo: 'contracts/**/*.yaml,specs/**/*.json'
+        type: string
+        default: '**/*.yaml,**/*.yml,**/*.json'
+      codigos:
+        description: >
+          Códigos de reglas a evaluar, separados por coma.
+          Si se omite, se evalúan todas las reglas activas.
+          Calculadas: R-GENM02, R-DATM01, R-DATM04
+          Verificación: R-GENM01, R-OPEM01, R-DATM02, R-DATM05
+          Ejemplo: 'R-DATM01,R-GENM02'
+        type: string
+        default: ''
+      copilot_model:
+        description: 'Modelo de Copilot a utilizar'
+        type: string
+        default: 'gpt-4o'
+    secrets:
+      github_token:
+        description: >
+          GITHUB_TOKEN del repositorio que llama. Necesario para comentar
+          en el PR y autenticar el Copilot CLI.
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    name: Revisar contratos OpenAPI
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout del repo con historial completo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # necesario para git diff y --rama
+
+      - name: Checkout del skill de gobernanza
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/api-governance-ai-skills
+          path: _skill
+          # token: ${{ secrets.SKILLS_REPO_TOKEN }}  # descomentar si el repo es privado
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Autenticar Copilot CLI
+        run: echo "$GH_TOKEN" | copilot auth login --with-token
+        env:
+          GH_TOKEN: ${{ secrets.github_token }}
+
+      - name: Detectar contratos OpenAPI modificados
+        id: detect
+        run: |
+          BASE="${{ github.event.pull_request.base.ref }}"
+
+          # Expandir patrones separados por coma en args para git diff
+          PATTERNS="${{ inputs.contracts_path }}"
+          GIT_PATTERNS=""
+          IFS=',' read -ra PARTS <<< "$PATTERNS"
+          for p in "${PARTS[@]}"; do
+            GIT_PATTERNS="$GIT_PATTERNS -- ${p// /}"
+          done
+
+          CHANGED=$(git diff --name-only --diff-filter=AMR \
+            origin/${BASE}...HEAD \
+            $GIT_PATTERNS \
+            | grep -v '^\.github/' || true)
+
+          OAS_FILES=""
+          while IFS= read -r f; do
+            if [ -f "$f" ] && grep -qiE '^openapi:' "$f" 2>/dev/null; then
+              OAS_FILES="${OAS_FILES}${f}\n"
+            fi
+          done <<< "$CHANGED"
+
+          echo "contracts<<EOF" >> $GITHUB_OUTPUT
+          printf "%b" "$OAS_FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          COUNT=$(printf "%b" "$OAS_FILES" | grep -c '.' || echo 0)
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          echo "base=$BASE" >> $GITHUB_OUTPUT
+
+      # El CLI de Copilot ejecuta el SKILL.md completo (pasos 1-4):
+      # extraer_contexto.py + lectura de contexto + verificaciones + tabla
+      # El script Python solo orquesta y publica el resultado en el PR.
+      # No se hace ninguna llamada HTTP a la Copilot Chat API.
+      - name: "Ejecutar skill via Copilot CLI y publicar hallazgos"
+        if: steps.detect.outputs.count != '0'
+        env:
+          GITHUB_TOKEN: ${{ secrets.github_token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_BRANCH: ${{ steps.detect.outputs.base }}
+          CONTRACTS: ${{ steps.detect.outputs.contracts }}
+          REPO: ${{ github.repository }}
+          COPILOT_MODEL: ${{ inputs.copilot_model }}
+          CODIGOS: ${{ inputs.codigos }}
+          SKILL_BASE: _skill
+        run: python _skill/.github/scripts/run_review.py
+
+      - name: Sin contratos OpenAPI detectados
+        if: steps.detect.outputs.count == '0'
+        run: echo "No se encontraron contratos OpenAPI modificados. Revisión omitida."

@@ -136,6 +136,7 @@ jobs:
       - name: "Análisis híbrido y publicar hallazgos"
         if: steps.detect.outputs.count != '0'
         env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_BRANCH: ${{ steps.detect.outputs.base }}
@@ -144,7 +145,10 @@ jobs:
           COPILOT_MODEL: ${{ inputs.copilot_model }}
           CODIGOS: ${{ inputs.codigos }}
           SKILL_BASE: _skill
-        run: python _skill/.github/scripts/run_review.py
+        run: |
+          echo "COPILOT_GITHUB_TOKEN=$COPILOT_GITHUB_TOKEN"
+          echo "GITHUB_TOKEN=$GITHUB_TOKEN"
+          python _skill/.github/scripts/run_review.py
 
       - name: Sin contratos OpenAPI detectados
         if: steps.detect.outputs.count == '0'

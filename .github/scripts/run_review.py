@@ -30,7 +30,7 @@ def generar_contexto(contrato: str, rama_base: str, codigos: str) -> tuple[str, 
     las preguntas de verificación [G1],[P1],[E1]… para Copilot.
     Devuelve (ruta_contexto.md | mensaje_error, ok).
     """
-    script = str(_SKILL_BASE / ".github/skills/revisar-contratos-api/scripts/extraer_contexto.py")
+    script = str(_SKILL_BASE / ".github/skills/revisar-contratos-api/scripts/extraer-contexto.py")
     output_path = f".api-review/{Path(contrato).stem}/contexto.md"
     cmd = [sys.executable, script, contrato,
            "--rama", f"origin/{rama_base}",

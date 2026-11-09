@@ -158,7 +158,7 @@ def main() -> None:
         "## Revisión de Contratos API\n\n"
         "> GitHub Copilot CLI (`copilot -p`)\n\n"
         + "\n---\n".join(resultados)
-        + "\n\n---\n*Generado por api-governance-ai-skills*"
+        + "\n\n---\n*Generado por api-governance*"
     )
 
     publicar_comentario(pr_number, repo, cuerpo)

@@ -45,7 +45,7 @@ jobs:
       - name: Checkout del skill de gobernanza
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/api-governance-ai-skills
+          repository: ${{ github.repository_owner }}/api-governance
           path: _skill
           # token: ${{ secrets.SKILLS_REPO_TOKEN }}  # descomentar si el repo es privado
 

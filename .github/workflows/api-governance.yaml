@@ -136,7 +136,6 @@ jobs:
       - name: "Análisis híbrido y publicar hallazgos"
         if: steps.detect.outputs.count != '0'
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_BRANCH: ${{ steps.detect.outputs.base }}
